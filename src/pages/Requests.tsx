@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Button, Drawer, Select, Tag, message, Form, Input, Upload } from "antd";
+import { Button, Drawer, Select, Tag, message, Form, Input, Upload, Tooltip } from "antd";
 import { UploadOutlined } from "@ant-design/icons";
 import CustomTable from "../components/CustomTable";
 import MainAreaLayout from "../components/main-layout/main-layout";
@@ -7,20 +7,8 @@ import { useNavigate } from "react-router";
 import { requestClient, useAppStore } from "../store";
 import { AxiosError } from "axios";
 import { roles, signStatus, signStatusDisplay } from "../libs/constants";
-
-interface Request {
-  id: string;
-  title: string;
-  documentCount: number;
-  rejectedCount: number;
-  createdAt: string;
-  status: string;
-}
-
-interface Officer {
-  id: string;
-  name: string;
-}
+import { Request, Officer, Signature } from '../@types/interfaces/Requests';
+const backendUrl = import.meta.env.VITE_BACKEND_URL;
 
 const Requests: React.FC = () => {
   const navigate = useNavigate();
@@ -28,12 +16,18 @@ const Requests: React.FC = () => {
   const [filteredRequests, setFilteredRequests] = useState<Request[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(false);
+  const [signingRequestId, setSigningRequestId] = useState<string | null>(null);
   const [isSendDrawerOpen, setIsSendDrawerOpen] = useState(false);
   const [isCreateDrawerOpen, setIsCreateDrawerOpen] = useState(false);
+  const [isSignDrawerOpen, setIsSignDrawerOpen] = useState(false);
+  const [isRejectDrawerOpen, setIsRejectDrawerOpen] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState<Request | null>(null);
   const [officers, setOfficers] = useState<Officer[]>([]);
+  const [signatures, setSignatures] = useState<Signature[]>([]);
+  const [signForm] = Form.useForm();
   const [sendForm] = Form.useForm();
   const [createForm] = Form.useForm();
+  const [rejectForm] = Form.useForm();
   const { session } = useAppStore();
   const userRole = session?.role;
   const isReader = userRole === roles.reader;
@@ -41,16 +35,34 @@ const Requests: React.FC = () => {
   const fetchRequests = async () => {
     try {
       setLoading(true);
+  
       const data = await requestClient.getRequests();
-
-      setRequests(data);
-      setFilteredRequests(data);
+  
+      const sortedRequests = (data as Request[]).sort((a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
+  
+      const mappedData = sortedRequests.map((req: any) => ({
+        ...req,
+        rawStatus: req.status
+          ? Number(
+              Object.keys(signStatusDisplay).find(
+                (key) =>
+                  signStatusDisplay[key as unknown as keyof typeof signStatusDisplay] === req.status
+              )
+            )
+          : signStatus.unsigned,
+      }));
+  
+      setRequests(mappedData);
+      setFilteredRequests(mappedData);
     } catch (error) {
       handleError(error, "Failed to fetch requests");
     } finally {
       setLoading(false);
     }
   };
+  
 
   const fetchOfficers = async () => {
     try {
@@ -59,6 +71,25 @@ const Requests: React.FC = () => {
     } catch (error) {
       console.error('fetchOfficers error:', error);
       handleError(error, "Failed to fetch officers. Please try again later.");
+    }
+  };
+
+  const fetchSignatures = async () => {
+    try {
+      const data = await requestClient.getSignatures();
+      setSignatures(
+        data.map((item) => ({
+          id: item.id,
+          name: item.userId,
+          url: item.url,
+          createdAt: item.createdBy,
+        }))
+      );
+    } catch (error: any) {
+      if (!error.message.includes('404')) {
+        message.error('Failed to fetch signatures');
+      }
+      setSignatures([]);
     }
   };
 
@@ -79,25 +110,30 @@ const Requests: React.FC = () => {
     try {
       const values = await createForm.validateFields();
       setLoading(true);
-
       const templateFile = values.templateFile?.[0]?.originFileObj;
-
       if (!templateFile) {
         throw new Error("Please upload a template file");
       }
 
-      console.log('Uploading template:', {
-        name: templateFile.name,
-        type: templateFile.type,
-        size: templateFile.size,
-      });
+      const allowedTypes = [
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // .docx
+        "application/msword", // .doc
+      ];
 
+      if (!allowedTypes.includes(templateFile.type)) {
+        message.error("Invalid file type. Please upload a .doc or .docx file.");
+        return;
+      }
+      // console.log('Uploading template:', {
+      //   name: templateFile.name,
+      //   type: templateFile.type,
+      //   size: templateFile.size,
+      // });
       await requestClient.createRequest({
         title: values.title,
         description: values.description,
         templateFile,
       });
-
       message.success("Request created successfully!");
       await fetchRequests();
       setIsCreateDrawerOpen(false);
@@ -159,17 +195,45 @@ const Requests: React.FC = () => {
     }
   };
 
-  const handleSignRequest = async (id: string) => {
+  const handleSignRequest = async () => {
     try {
-      setLoading(true);
-      await requestClient.signRequest(id);
+      const values = await signForm.validateFields();
+      const requestId = selectedRequest!.id;
+      setSigningRequestId(requestId);
+      setRequests((prev) =>
+        prev.map((req) =>
+          req.id === requestId
+            ? {
+              ...req,
+              status: signStatusDisplay[signStatus.inProcess],
+              rawStatus: signStatus.inProcess,
+            }
+            : req
+        )
+      );
+      setFilteredRequests((prev) =>
+        prev.map((req) =>
+          req.id === requestId
+            ? {
+              ...req,
+              status: signStatusDisplay[signStatus.inProcess],
+              rawStatus: signStatus.inProcess,
+            }
+            : req
+        )
+      );
+      await requestClient.signRequest(requestId, values.signatureId);
       message.success("Request signed successfully!");
       await fetchRequests();
+      setIsSignDrawerOpen(false);
+      signForm.resetFields();
+      setSelectedRequest(null);
     } catch (error) {
       console.error('handleSignRequest error:', error);
       handleError(error, "Failed to sign request");
+      await fetchRequests();
     } finally {
-      setLoading(false);
+      setSigningRequestId(null);
     }
   };
 
@@ -187,12 +251,16 @@ const Requests: React.FC = () => {
     }
   };
 
-  const handleRejectRequest = async (id: string) => {
+  const handleRejectRequest = async () => {
     try {
+      const values = await rejectForm.validateFields();
       setLoading(true);
-      await requestClient.request("POST", `/api/requests/${id}/reject`);
+      await requestClient.rejectRequest(selectedRequest!.id, values.rejectionReason);
       message.success("Request rejected successfully!");
       await fetchRequests();
+      setIsRejectDrawerOpen(false);
+      rejectForm.resetFields();
+      setSelectedRequest(null);
     } catch (error) {
       console.error('handleRejectRequest error:', error);
       handleError(error, "Failed to reject request");
@@ -201,10 +269,44 @@ const Requests: React.FC = () => {
     }
   };
 
+  const handlePrintRequest = async (requestId: string) => {
+    try {
+      const pdfBlob = await requestClient.printRequest(requestId);
+      const url = URL.createObjectURL(pdfBlob);
+      const printWindow = window.open(url);
+      if (printWindow) {
+        printWindow.onload = () => {
+          printWindow.print();
+          printWindow.onbeforeunload = () => URL.revokeObjectURL(url);
+        };
+      } else {
+        message.error('Failed to open print window');
+      }
+    } catch (error) {
+      console.error('handlePrintRequest error:', error);
+      handleError(error, 'Failed to print documents');
+    }
+  };
+
+  const handleDownloadAll = async (requestId: string, requestTitle: string) => {
+    try {
+      const zipBlob = await requestClient.downloadZip(requestId);
+      const url = URL.createObjectURL(zipBlob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${requestTitle}_signed_documents.zip`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('handleDownloadAll error:', error);
+      handleError(error, 'Failed to download ZIP');
+    }
+  };
+
   const handleDelegateRequest = async (id: string) => {
     try {
       setLoading(true);
-      await requestClient.request("POST", `/api/requests/${id}/delegate`);
+      await requestClient.delegateRequest(id);
       message.success("Request delegated successfully!");
       await fetchRequests();
     } catch (error) {
@@ -236,9 +338,8 @@ const Requests: React.FC = () => {
 
   const getActions = (record: Request) => {
     const actions: JSX.Element[] = [];
-    const requestStatus = record.status;
 
-    console.log('Rendering actions for request:', { id: record.id, status: requestStatus });
+    // console.log('Rendering actions for request:', { id: record.id, rawStatus: record.rawStatus, status: record.status });
 
     actions.push(
       <Button key="clone" onClick={() => handleCloneRequest(record.id)}>
@@ -246,8 +347,8 @@ const Requests: React.FC = () => {
       </Button>
     );
 
-    if (isReader) {
-      if (requestStatus === signStatusDisplay[signStatus.unsigned]) {
+    if (record.rawStatus === signStatus.unsigned) {
+      if (isReader) {
         actions.push(
           <Button
             key="send"
@@ -268,59 +369,72 @@ const Requests: React.FC = () => {
             Delete
           </Button>
         );
-      } else if (requestStatus === signStatusDisplay[signStatus.delegated]) {
-        actions.push(
-          <Button
-            key="sign"
-            type="primary"
-            onClick={() => handleSignRequest(record.id)}
-          >
-            Sign
-          </Button>
-        );
-      } else if (requestStatus === signStatusDisplay[signStatus.readyForDispatch]) {
-        actions.push(
-          <Button key="print">Print</Button>,
-          <Button key="download">Download All (ZIP)</Button>,
-          <Button
-            key="dispatch"
-            type="primary"
-            onClick={() => handleDispatch(record.id)}
-          >
-            Dispatch
-          </Button>
-        );
       }
-    } else {
-      // Officer-specific actions
-      if (requestStatus === signStatusDisplay[signStatus.readForSign]) {
+    } else if (record.rawStatus === signStatus.delegated) {
+      actions.push(
+        <Button
+          key="sign"
+          type="primary"
+          loading={signingRequestId === record.id}
+          disabled={signingRequestId === record.id}
+          onClick={() => {
+            setSelectedRequest(record);
+            setIsSignDrawerOpen(true);
+            fetchSignatures();
+          }}
+        >
+          Sign
+        </Button>
+      );
+    } else if (record.rawStatus === signStatus.readForSign && !isReader) {
+      actions.push(
+        <Button
+          key="sign"
+          type="primary"
+          loading={signingRequestId === record.id}
+          disabled={signingRequestId === record.id}
+          onClick={() => {
+            setSelectedRequest(record);
+            setIsSignDrawerOpen(true);
+            fetchSignatures();
+          }}
+        >
+          Sign
+        </Button>,
+        <Button
+          key="reject"
+          danger
+          onClick={() => {
+            setSelectedRequest(record);
+            setIsRejectDrawerOpen(true);
+          }}
+        >
+          Reject
+        </Button>,
+        <Button
+          key="delegate"
+          onClick={() => handleDelegateRequest(record.id)}
+        >
+          Delegate
+        </Button>
+      );
+    } else if (record.rawStatus === signStatus.Signed) {
+      actions.push(
+        <Button
+          key="print"
+          onClick={() => handlePrintRequest(record.id)}
+        >
+          Print
+        </Button>,
+        <Button
+          key="download"
+          onClick={() => handleDownloadAll(record.id, record.title)}
+        >
+          Download All (ZIP)
+        </Button>
+      );
+      if (isReader) {
         actions.push(
-          <Button
-            key="sign"
-            type="primary"
-            onClick={() => handleSignRequest(record.id)}
-          >
-            Sign
-          </Button>,
-          <Button
-            key="reject"
-            danger
-            onClick={() => handleRejectRequest(record.id)}
-          >
-            Reject
-          </Button>,
-          <Button
-            key="delegate"
-            onClick={() => handleDelegateRequest(record.id)}
-          >
-            Delegate
-          </Button>
-        );
-      } else if (requestStatus === signStatusDisplay[signStatus.readyForDispatch]) {
-        actions.push(
-          <Button key="submit">Submit</Button>,
-          <Button key="print">Print All</Button>,
-          <Button key="download">Download All (ZIP)</Button>,
           <Button
             key="dispatch"
             type="primary"
@@ -366,17 +480,10 @@ const Requests: React.FC = () => {
       title: "Rejected Documents",
       dataIndex: "rejectedCount",
       key: "rejectedCount",
-      render: (count: number, record: Request) =>
-        count > 0 ? (
-          <Button
-            type="link"
-            onClick={() => navigate(`/dashboard/request/${record.id}/rejected`)}
-          >
-            {count}
-          </Button>
-        ) : (
-          count
-        ),
+      render: (count: number) =>
+      (
+        count
+      ),
     },
     {
       title: "Created At",
@@ -387,32 +494,50 @@ const Requests: React.FC = () => {
       title: "Request Status",
       dataIndex: "status",
       key: "status",
-      render: (requestStatus: string) => {
-        console.log('Rendering status:', requestStatus);
+      render: (_: string, record: Request) => {
+        const displayStatus = isReader && record.rawStatus === signStatus.Signed
+          ? signStatusDisplay[signStatus.readyForDispatch]
+          : record.status;
+        // console.log('Status render:', {
+        //   id: record.id,
+        //   rawStatus: record.rawStatus,
+        //   status: record.status,
+        //   rejectionReason: record.rejectionReason,
+        //   isRejected: record.rawStatus === signStatus.rejected,
+        //   hasReason: !!record.rejectionReason,
+        // });
         return (
-          <Tag
-            color={
-              requestStatus === signStatusDisplay[signStatus.unsigned]
-                ? "red"
-                : requestStatus === signStatusDisplay[signStatus.readForSign]
-                ? "orange"
-                : requestStatus === signStatusDisplay[signStatus.rejected]
-                ? "volcano"
-                : requestStatus === signStatusDisplay[signStatus.delegated]
-                ? "blue"
-                : requestStatus === signStatusDisplay[signStatus.inProcess]
-                ? "cyan"
-                : requestStatus === signStatusDisplay[signStatus.Signed]
-                ? "green"
-                : requestStatus === signStatusDisplay[signStatus.readyForDispatch]
-                ? "lime"
-                : requestStatus === signStatusDisplay[signStatus.dispatched]
-                ? "purple"
-                : "default"
+          <Tooltip
+            title={
+              record.rawStatus === signStatus.rejected && record.rejectionReason
+                ? `Reason: ${record.rejectionReason}`
+                : ''
             }
           >
-            {requestStatus || "Unknown"}
-          </Tag>
+            <Tag
+              color={
+                displayStatus === signStatusDisplay[signStatus.unsigned]
+                  ? "red"
+                  : displayStatus === signStatusDisplay[signStatus.readForSign]
+                    ? "orange"
+                    : displayStatus === signStatusDisplay[signStatus.rejected]
+                      ? "volcano"
+                      : displayStatus === signStatusDisplay[signStatus.delegated]
+                        ? "blue"
+                        : displayStatus === signStatusDisplay[signStatus.inProcess]
+                          ? "cyan"
+                          : displayStatus === signStatusDisplay[signStatus.Signed]
+                            ? "green"
+                            : displayStatus === signStatusDisplay[signStatus.readyForDispatch]
+                              ? "lime"
+                              : displayStatus === signStatusDisplay[signStatus.dispatched]
+                                ? "purple"
+                                : "default"
+              }
+            >
+              {displayStatus || "Unknown"}
+            </Tag>
+          </Tooltip>
         );
       },
     },
@@ -542,6 +667,95 @@ const Requests: React.FC = () => {
             </Button>
             <Button type="primary" htmlType="submit" loading={loading}>
               Create
+            </Button>
+          </div>
+        </Form>
+      </Drawer>
+      <Drawer
+        title="Sign Request"
+        open={isSignDrawerOpen}
+        onClose={() => {
+          setIsSignDrawerOpen(false);
+          setSelectedRequest(null);
+          signForm.resetFields();
+        }}
+        footer={null}
+        width={400}
+      >
+        <Form form={signForm} layout="vertical" onFinish={handleSignRequest}>
+          <Form.Item
+            label="Select Signature"
+            name="signatureId"
+            rules={[{ required: true, message: "Please select a signature" }]}
+          >
+            <Select
+              placeholder="Select a signature"
+              style={{ width: '100%' }}
+              options={signatures.map((sig) => ({
+                value: sig.id,
+                label: (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <img
+                      src={`${backendUrl}${sig.url}`}
+                      alt={sig.name}
+                      style={{ width: 40, height: 40, objectFit: 'contain', border: '1px solid #ddd' }}
+                    />
+                    <span>{sig.name}</span>
+                  </div>
+                ),
+              }))}
+            />
+          </Form.Item>
+          <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+            <Button
+              onClick={() => {
+                setIsSignDrawerOpen(false);
+                setSelectedRequest(null);
+                signForm.resetFields();
+              }}
+            >
+              Cancel
+            </Button>
+            <Button type="primary" htmlType="submit" loading={signingRequestId === selectedRequest?.id}>
+              Sign
+            </Button>
+          </div>
+        </Form>
+      </Drawer>
+      <Drawer
+        title="Reject Request"
+        open={isRejectDrawerOpen}
+        onClose={() => {
+          setIsRejectDrawerOpen(false);
+          setSelectedRequest(null);
+          rejectForm.resetFields();
+        }}
+        footer={null}
+        width={400}
+      >
+        <Form form={rejectForm} layout="vertical" onFinish={handleRejectRequest}>
+          <Form.Item
+            label="Rejection Reason"
+            name="rejectionReason"
+            rules={[{ required: true, message: "Please enter a rejection reason" }]}
+          >
+            <Input.TextArea
+              placeholder="Enter the reason for rejection"
+              rows={4}
+            />
+          </Form.Item>
+          <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+            <Button
+              onClick={() => {
+                setIsRejectDrawerOpen(false);
+                setSelectedRequest(null);
+                rejectForm.resetFields();
+              }}
+            >
+              Cancel
+            </Button>
+            <Button type="primary" htmlType="submit" loading={loading}>
+              Reject
             </Button>
           </div>
         </Form>

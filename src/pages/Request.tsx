@@ -1,57 +1,40 @@
 import React, { useState, useEffect } from "react";
-import { Button, Upload, message, Table, Space } from "antd";
+import { Button, Upload, message, Table, Space, Drawer, Form, Input, Tooltip } from "antd";
 import { UploadOutlined, EyeOutlined, DeleteOutlined, DownloadOutlined } from "@ant-design/icons";
 import MainAreaLayout from "../components/main-layout/main-layout";
 import { useParams } from "react-router";
-import { requestClient } from "../store";
+import { requestClient, useAppStore } from "../store";
 import { AxiosError } from "axios";
 import * as XLSX from "xlsx";
 import mongoose from "mongoose";
-import { signStatus } from "../libs/constants";
-
-interface TemplateVariable {
-  name: string;
-  required: boolean;
-  showOnExcel: boolean;
-}
-
-interface Document {
-  id: string;
-  name: string;
-  filePath: string;
-  uploadedAt: string;
-  signedDate?: string;
-  signStatus: number;
-  data: Record<string, any>;
-}
-
-interface Request {
-  id: string;
-  title: string;
-  documentCount: number;
-  documents: Document[];
-  status: string;
-  templateVariables: TemplateVariable[];
-}
+import { roles, signStatus, signStatusDisplay } from "../libs/constants";
+import type { TemplateVariable, Document, Request } from "../@types/interfaces/Request";
+const backendUrl = import.meta.env.VITE_BACKEND_URL;
 
 const Request: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const [request, setRequest] = useState<Request | null>(null);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [isRejectDrawerOpen, setIsRejectDrawerOpen] = useState(false);
+  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
+  const [rejectForm] = Form.useForm();
+  const { session } = useAppStore();
+  const userRole = session?.role;
+  const isOfficer = userRole === roles.officer;
 
   const fetchRequest = async () => {
     if (!id) return;
     try {
       setLoading(true);
       const data = await requestClient.getRequest(id);
-      console.log('Fetched request:', data);
       setRequest({
         ...data,
         documents: (data.documents || []).map((doc: any) => ({
           ...doc,
-          signStatus: doc.signStatus || signStatus.unsigned,
+          signStatus: doc.signStatus,
           data: doc.data || {},
+          rejectionReason: doc.rejectionReason,
         })),
         templateVariables: data.templateVariables || [],
       });
@@ -112,7 +95,6 @@ const Request: React.FC = () => {
       return;
     }
 
-    // Filter variables where showOnExcel is true
     const excelVariables = request.templateVariables
       .filter(v => v.showOnExcel)
       .map(v => v.name);
@@ -122,14 +104,9 @@ const Request: React.FC = () => {
       return;
     }
 
-    // Create a worksheet with variable names as headers
     const ws = XLSX.utils.json_to_sheet([{}], { header: excelVariables });
-
-    // Create a workbook and append the worksheet
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Template");
-
-    // Generate Excel file and trigger download
     const excelBuffer = XLSX.write(wb, { bookType: "xlsx", type: "array" });
     const blob = new Blob([excelBuffer], { type: "application/octet-stream" });
     const url = URL.createObjectURL(blob);
@@ -141,7 +118,11 @@ const Request: React.FC = () => {
   };
 
   const handlePreviewDocument = (document: Document) => {
-    window.open(document.filePath, '_blank');
+    if (!id) return;
+    const url = document.signStatus === signStatus.Signed
+      ? `${backendUrl}/Uploads/signed/${id}/${document.id}_signed.pdf`
+      : `${backendUrl}/api/requests/${id}/documents/${document.id}/preview`;
+    window.open(url, '_blank');
   };
 
   const handleDeleteDocument = async (document: Document) => {
@@ -153,6 +134,25 @@ const Request: React.FC = () => {
     } catch (error) {
       console.error('deleteDocument error:', error);
       handleError(error, "Failed to delete document");
+    }
+  };
+
+  const handleRejectDocument = async () => {
+    if (!id || !selectedDocumentId) return;
+    try {
+      const values = await rejectForm.validateFields();
+      setLoading(true);
+      await requestClient.rejectDocument(id, selectedDocumentId, values.rejectionReason);
+      message.success("Document rejected successfully!");
+      await fetchRequest();
+      setIsRejectDrawerOpen(false);
+      setSelectedDocumentId(null);
+      rejectForm.resetFields();
+    } catch (error) {
+      console.error('handleRejectDocument error:', error);
+      handleError(error, "Failed to reject document");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -172,13 +172,12 @@ const Request: React.FC = () => {
     fetchRequest();
   }, [id]);
 
-  const getColumns = (documents: Document[]) => {
-    const excelFields = new Set<string>();
-    documents.forEach(doc => {
-      Object.keys(doc.data).forEach(field => excelFields.add(field));
-    });
+  const getColumns = (templateVariables: TemplateVariable[]) => {
+    const excelFields = templateVariables
+      .filter(variable => variable.showOnExcel)
+      .map(variable => variable.name);
 
-    const dynamicColumns = Array.from(excelFields).map(field => ({
+    const dynamicColumns = excelFields.map(field => ({
       title: field,
       dataIndex: ['data', field],
       key: field,
@@ -197,14 +196,17 @@ const Request: React.FC = () => {
         title: 'Request Status',
         dataIndex: 'signStatus',
         key: 'signStatus',
-        render: (status: keyof typeof signStatus) => {
-          const statusMap: Record<number, string> = {
-            [signStatus.unsigned]: 'Unsigned',
-            [signStatus.Signed]: 'Signed',
-            [signStatus.delegated]: 'Delegated',
-          };
-          return statusMap[status as any] || 'Unknown';
-        },
+        render: (status: number, record: Document) => (
+          <Tooltip
+            title={
+              status === signStatus.rejected ? record.rejectionReason
+                ? `Reason: ${record.rejectionReason}`
+                : 'No reason provided' : ""
+            }
+          >
+            <span>{signStatusDisplay[status as signStatus] || 'Unknown'}</span>
+          </Tooltip>
+        ),
       },
       {
         title: 'Actions',
@@ -214,12 +216,12 @@ const Request: React.FC = () => {
             {record.signStatus === signStatus.Signed && (
               <Button
                 icon={<DownloadOutlined />}
-                // onClick={() => handleDownloadDocument(record)}
+                onClick={() => handlePreviewDocument(record)}
               >
                 Download
               </Button>
             )}
-            {(record.signStatus === signStatus.unsigned || record.signStatus === signStatus.delegated) && (
+            {(record.signStatus === signStatus.unsigned || record.signStatus === signStatus.readForSign) && (
               <Button
                 icon={<EyeOutlined />}
                 onClick={() => handlePreviewDocument(record)}
@@ -227,7 +229,18 @@ const Request: React.FC = () => {
                 Preview
               </Button>
             )}
-            {record.signStatus === signStatus.unsigned && (
+            {isOfficer && (record.signStatus === signStatus.unsigned || record.signStatus === signStatus.readForSign) && (
+              <Button
+                danger
+                onClick={() => {
+                  setSelectedDocumentId(record.id);
+                  setIsRejectDrawerOpen(true);
+                }}
+              >
+                Reject
+              </Button>
+            )}
+            {!isOfficer && record.signStatus === signStatus.unsigned && (
               <Button
                 icon={<DeleteOutlined />}
                 danger
@@ -247,8 +260,9 @@ const Request: React.FC = () => {
       title={`Request: ${request?.title || "Loading..."}`}
       extra={
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <Upload
-            accept=".xlsx,.xls,.csv"
+          {request?.status === signStatusDisplay[signStatus.unsigned] && (
+            <Upload
+            accept=".xlsx,.xls"
             multiple
             showUploadList={false}
             beforeUpload={() => false}
@@ -265,6 +279,8 @@ const Request: React.FC = () => {
               Bulk Upload Excel Files
             </Button>
           </Upload>
+          )}
+          
           <Button onClick={handleDownloadTemplate}>
             Download Template
           </Button>
@@ -272,12 +288,47 @@ const Request: React.FC = () => {
       }
     >
       <Table
-        columns={request?.documents ? getColumns(request.documents) : []}
+        columns={request ? getColumns(request.templateVariables || []) : []}
         dataSource={request?.documents || []}
         rowKey="id"
         loading={loading}
         locale={{ emptyText: "No documents uploaded yet" }}
       />
+      <Drawer
+        title="Reject Document"
+        open={isRejectDrawerOpen}
+        onClose={() => {
+          setIsRejectDrawerOpen(false);
+          setSelectedDocumentId(null);
+          rejectForm.resetFields();
+        }}
+        footer={null}
+        width={400}
+      >
+        <Form form={rejectForm} layout="vertical" onFinish={handleRejectDocument}>
+          <Form.Item
+            label="Rejection Reason"
+            name="rejectionReason"
+            rules={[{ required: true, message: "Please enter a rejection reason" }]}
+          >
+            <Input.TextArea placeholder="Enter the reason for rejection" rows={4} />
+          </Form.Item>
+          <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+            <Button
+              onClick={() => {
+                setIsRejectDrawerOpen(false);
+                setSelectedDocumentId(null);
+                rejectForm.resetFields();
+              }}
+            >
+              Cancel
+            </Button>
+            <Button type="primary" htmlType="submit" loading={loading}>
+              Reject
+            </Button>
+          </div>
+        </Form>
+      </Drawer>
     </MainAreaLayout>
   );
 };

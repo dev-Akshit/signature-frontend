@@ -9,6 +9,7 @@ import { CourtUsers } from "./pages/CourtUsers.tsx";
 import RequestPage from "./pages/Request.tsx";
 import RedirectByRole from "./components/RedirectByRole/index.tsx";
 import TemplatePreview from "./pages/TemplatePreview.tsx";
+import DocumentData from "./pages/DocumentData.tsx";
 import RoleProtectedRoute from "./components/RoleProtectedRoute.tsx/index.tsx";
 import { roles } from "./libs/constants.ts";
 import { Users } from "./pages/Users.tsx";
@@ -57,6 +58,7 @@ export function Router() {
 					</Route>
 				</Route>
 			</Route>
+			<Route path="document/:documentId" element={<DocumentData />} />
 		</Routes>
 	);
 }
