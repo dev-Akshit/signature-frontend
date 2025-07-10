@@ -22,6 +22,7 @@ const Request: React.FC = () => {
   const { session } = useAppStore();
   const userRole = session?.role;
   const isOfficer = userRole === roles.officer;
+  const userId = session?.userId;
 
   const fetchRequest = async () => {
     if (!id) return;
@@ -30,6 +31,7 @@ const Request: React.FC = () => {
       const data = await requestClient.getRequest(id);
       setRequest({
         ...data,
+        createdBy: data.createdBy ?? "",
         documents: (data.documents || []).map((doc: any) => ({
           ...doc,
           signStatus: doc.signStatus,
@@ -71,7 +73,7 @@ const Request: React.FC = () => {
             url: file.name,
             data: rowData,
             signStatus: signStatus.unsigned,
-            createdAt: new Date().toISOString(),
+            createdAt: new Date().toLocaleString(),
           });
         });
       }
@@ -229,7 +231,7 @@ const Request: React.FC = () => {
                 Preview
               </Button>
             )}
-            {isOfficer && (record.signStatus === signStatus.unsigned || record.signStatus === signStatus.readForSign) && (
+            {isOfficer && request?.createdBy != userId && (record.signStatus === signStatus.unsigned || record.signStatus === signStatus.readForSign) && (
               <Button
                 danger
                 onClick={() => {
@@ -240,7 +242,7 @@ const Request: React.FC = () => {
                 Reject
               </Button>
             )}
-            {!isOfficer && record.signStatus === signStatus.unsigned && (
+            {request?.createdBy == userId && record.signStatus === signStatus.unsigned && (
               <Button
                 icon={<DeleteOutlined />}
                 danger

@@ -12,6 +12,7 @@ export const documentSchema = Zod.object({
   rejectionReason: Zod.string().optional(),
   qrCodePath: Zod.string().optional(),
   data: Zod.record(Zod.any()).optional(),
+  createdeBy: Zod.string().optional(),
 });
 
 export const templateVariablesSchema = Zod.object({
@@ -27,6 +28,7 @@ export const requestSchema = Zod.object({
   documentCount: Zod.number(),
   rejectedCount: Zod.number(),
   createdAt: Zod.string(),
+  createdBy: Zod.string().optional(),
   status: Zod.number()
     .optional()
     .transform((val) =>

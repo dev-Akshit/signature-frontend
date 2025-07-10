@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { Button, Drawer, Select, Tag, message, Form, Input, Upload, Tooltip } from "antd";
-import { UploadOutlined } from "@ant-design/icons";
+import { Button, Drawer,Menu, Dropdown, Select, Tag, message, Form, Input, Upload, Tooltip } from "antd";
+import { UploadOutlined, MoreOutlined } from "@ant-design/icons";
 import CustomTable from "../components/CustomTable";
 import MainAreaLayout from "../components/main-layout/main-layout";
 import { useNavigate } from "react-router";
@@ -30,30 +30,31 @@ const Requests: React.FC = () => {
   const [rejectForm] = Form.useForm();
   const { session } = useAppStore();
   const userRole = session?.role;
+  const userId = session?.userId;
   const isReader = userRole === roles.reader;
 
   const fetchRequests = async () => {
     try {
       setLoading(true);
-  
+
       const data = await requestClient.getRequests();
-  
+
       const sortedRequests = (data as Request[]).sort((a, b) =>
         new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
       );
-  
+
       const mappedData = sortedRequests.map((req: any) => ({
         ...req,
         rawStatus: req.status
           ? Number(
-              Object.keys(signStatusDisplay).find(
-                (key) =>
-                  signStatusDisplay[key as unknown as keyof typeof signStatusDisplay] === req.status
-              )
+            Object.keys(signStatusDisplay).find(
+              (key) =>
+                signStatusDisplay[key as unknown as keyof typeof signStatusDisplay] === req.status
             )
+          )
           : signStatus.unsigned,
       }));
-  
+
       setRequests(mappedData);
       setFilteredRequests(mappedData);
     } catch (error) {
@@ -62,7 +63,7 @@ const Requests: React.FC = () => {
       setLoading(false);
     }
   };
-  
+
 
   const fetchOfficers = async () => {
     try {
@@ -331,124 +332,117 @@ const Requests: React.FC = () => {
 
   useEffect(() => {
     fetchRequests();
-    if (isReader) {
-      fetchOfficers();
-    }
-  }, [isReader]);
+    fetchOfficers();
+  }, []);
 
   const getActions = (record: Request) => {
-    const actions: JSX.Element[] = [];
+    const menuItems: any[] = [];
 
-    // console.log('Rendering actions for request:', { id: record.id, rawStatus: record.rawStatus, status: record.status });
-
-    actions.push(
-      <Button key="clone" onClick={() => handleCloneRequest(record.id)}>
-        Clone
-      </Button>
-    );
+    // Clone
+    menuItems.push({
+      key: "clone",
+      label: "Clone",
+      onClick: () => handleCloneRequest(record.id),
+    });
 
     if (record.rawStatus === signStatus.unsigned) {
-      if (isReader) {
-        actions.push(
-          <Button
-            key="send"
-            type="primary"
-            disabled={record.documentCount === 0 || officers.length === 0}
-            onClick={() => {
+        menuItems.push(
+          {
+            key: "send",
+            label: "Send for Signature",
+            disabled: record.documentCount === 0 || officers.length === 0,
+            onClick: () => {
               setSelectedRequest(record);
               setIsSendDrawerOpen(true);
-            }}
-          >
-            Send for Signature
-          </Button>,
-          <Button
-            key="delete"
-            danger
-            onClick={() => handleDeleteRequest(record.id)}
-          >
-            Delete
-          </Button>
+            },
+          },
+          {
+            key: "delete",
+            label: "Delete",
+            danger: true,
+            onClick: () => handleDeleteRequest(record.id),
+          }
         );
-      }
     } else if (record.rawStatus === signStatus.delegated) {
-      actions.push(
-        <Button
-          key="sign"
-          type="primary"
-          loading={signingRequestId === record.id}
-          disabled={signingRequestId === record.id}
-          onClick={() => {
+      menuItems.push({
+        key: "sign",
+        label: "Sign",
+        disabled: signingRequestId === record.id,
+        onClick: () => {
+          setSelectedRequest(record);
+          setIsSignDrawerOpen(true);
+          fetchSignatures();
+        },
+      });
+    } else if (record.rawStatus === signStatus.readForSign && !isReader && record.createdBy != userId) {
+      menuItems.push(
+        {
+          key: "sign",
+          label: "Sign",
+          disabled: signingRequestId === record.id,
+          onClick: () => {
             setSelectedRequest(record);
             setIsSignDrawerOpen(true);
             fetchSignatures();
-          }}
-        >
-          Sign
-        </Button>
-      );
-    } else if (record.rawStatus === signStatus.readForSign && !isReader) {
-      actions.push(
-        <Button
-          key="sign"
-          type="primary"
-          loading={signingRequestId === record.id}
-          disabled={signingRequestId === record.id}
-          onClick={() => {
-            setSelectedRequest(record);
-            setIsSignDrawerOpen(true);
-            fetchSignatures();
-          }}
-        >
-          Sign
-        </Button>,
-        <Button
-          key="reject"
-          danger
-          onClick={() => {
+          },
+        },
+        {
+          key: "reject",
+          label: "Reject",
+          danger: true,
+          onClick: () => {
             setSelectedRequest(record);
             setIsRejectDrawerOpen(true);
-          }}
-        >
-          Reject
-        </Button>,
-        <Button
-          key="delegate"
-          onClick={() => handleDelegateRequest(record.id)}
-        >
-          Delegate
-        </Button>
+          },
+        },
+        {
+          key: "delegate",
+          label: "Delegate",
+          onClick: () => handleDelegateRequest(record.id),
+        }
       );
     } else if (record.rawStatus === signStatus.Signed) {
-      actions.push(
-        <Button
-          key="print"
-          onClick={() => handlePrintRequest(record.id)}
-        >
-          Print
-        </Button>,
-        <Button
-          key="download"
-          onClick={() => handleDownloadAll(record.id, record.title)}
-        >
-          Download All (ZIP)
-        </Button>
+      menuItems.push(
+        {
+          key: "print",
+          label: "Print",
+          onClick: () => handlePrintRequest(record.id),
+        },
+        {
+          key: "download",
+          label: "Download All (ZIP)",
+          onClick: () => handleDownloadAll(record.id, record.title),
+        }
       );
+
       if (isReader) {
-        actions.push(
-          <Button
-            key="dispatch"
-            type="primary"
-            onClick={() => handleDispatch(record.id)}
-          >
-            Dispatch
-          </Button>
-        );
+        menuItems.push({
+          key: "dispatch",
+          label: "Dispatch",
+          onClick: () => handleDispatch(record.id),
+        });
       }
     }
 
-    return actions;
-  };
+    const menu = (
+      <Menu
+        items={menuItems.map((item) => ({
+          ...item,
+          onClick: () => {
+            item.onClick?.();
+          },
+          danger: item.danger,
+          disabled: item.disabled,
+        }))}
+      />
+    );
 
+    return (
+      <Dropdown overlay={menu} trigger={["click"]}>
+        <Button icon={<MoreOutlined />} />
+      </Dropdown>
+    );
+  };
   const columns = [
     {
       title: "Title",
@@ -480,9 +474,15 @@ const Requests: React.FC = () => {
       title: "Rejected Documents",
       dataIndex: "rejectedCount",
       key: "rejectedCount",
-      render: (count: number) =>
+      render: (count: number, record: Request) =>
       (
-        count
+        <Button
+          type="link"
+          onClick={() => navigate(`/dashboard/request/${record.id}/rejected`)}
+          disabled={count === 0}
+        >
+          {count}
+        </Button>
       ),
     },
     {
@@ -542,11 +542,9 @@ const Requests: React.FC = () => {
       },
     },
     {
-      title: "Action",
+      title: "Actions",
       key: "actions",
-      render: (record: Request) => (
-        <div style={{ display: "flex", gap: "8px" }}>{getActions(record)}</div>
-      ),
+      render: (record: Request) => getActions(record),
     },
   ];
 

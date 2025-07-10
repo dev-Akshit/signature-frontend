@@ -9,6 +9,7 @@ import { CourtUsers } from "./pages/CourtUsers.tsx";
 import RequestPage from "./pages/Request.tsx";
 import RedirectByRole from "./components/RedirectByRole/index.tsx";
 import TemplatePreview from "./pages/TemplatePreview.tsx";
+import RejectedDocs from "./pages/RejectedDocs.tsx";
 import DocumentData from "./pages/DocumentData.tsx";
 import RoleProtectedRoute from "./components/RoleProtectedRoute.tsx/index.tsx";
 import { roles } from "./libs/constants.ts";
@@ -39,6 +40,10 @@ export function Router() {
 							<Route
 								path="template/:id"
 								element={<TemplatePreview />}
+							/>
+							<Route
+								path="request/:id/rejected"
+								element={<RejectedDocs />}
 							/>
 						</Route>
 

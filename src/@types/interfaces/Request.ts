@@ -22,4 +22,5 @@ export interface Request {
   documents: Document[];
   status: string;
   templateVariables: TemplateVariable[];
+  createdBy: string;
 }
