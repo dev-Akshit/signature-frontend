@@ -242,7 +242,7 @@ const Request: React.FC = () => {
                 Reject
               </Button>
             )}
-            {request?.createdBy == userId && record.signStatus === signStatus.unsigned && (
+            {request?.createdBy == userId && request?.status === signStatusDisplay[signStatus.unsigned] && (
               <Button
                 icon={<DeleteOutlined />}
                 danger

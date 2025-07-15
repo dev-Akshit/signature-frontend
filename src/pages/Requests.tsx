@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Button, Drawer,Menu, Dropdown, Select, Tag, message, Form, Input, Upload, Tooltip } from "antd";
+import { Button, Drawer, Menu, Dropdown, Select, Tag, message, Form, Input, Upload, Tooltip } from "antd";
 import { UploadOutlined, MoreOutlined } from "@ant-design/icons";
 import CustomTable from "../components/CustomTable";
 import MainAreaLayout from "../components/main-layout/main-layout";
@@ -8,6 +8,7 @@ import { requestClient, useAppStore } from "../store";
 import { AxiosError } from "axios";
 import { roles, signStatus, signStatusDisplay } from "../libs/constants";
 import { Request, Officer, Signature } from '../@types/interfaces/Requests';
+import socket from "../client/socket";
 const backendUrl = import.meta.env.VITE_BACKEND_URL;
 
 const Requests: React.FC = () => {
@@ -32,17 +33,15 @@ const Requests: React.FC = () => {
   const userRole = session?.role;
   const userId = session?.userId;
   const isReader = userRole === roles.reader;
+  const [signingProgress, setSigningProgress] = useState<{ [requestId: string]: { current: number; total: number }; }>({});
 
   const fetchRequests = async () => {
     try {
       setLoading(true);
-
       const data = await requestClient.getRequests();
-
       const sortedRequests = (data as Request[]).sort((a, b) =>
         new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
       );
-
       const mappedData = sortedRequests.map((req: any) => ({
         ...req,
         rawStatus: req.status
@@ -54,7 +53,6 @@ const Requests: React.FC = () => {
           )
           : signStatus.unsigned,
       }));
-
       setRequests(mappedData);
       setFilteredRequests(mappedData);
     } catch (error) {
@@ -63,7 +61,6 @@ const Requests: React.FC = () => {
       setLoading(false);
     }
   };
-
 
   const fetchOfficers = async () => {
     try {
@@ -115,21 +112,14 @@ const Requests: React.FC = () => {
       if (!templateFile) {
         throw new Error("Please upload a template file");
       }
-
       const allowedTypes = [
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // .docx
-        "application/msword", // .doc
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/msword",
       ];
-
       if (!allowedTypes.includes(templateFile.type)) {
         message.error("Invalid file type. Please upload a .doc or .docx file.");
         return;
       }
-      // console.log('Uploading template:', {
-      //   name: templateFile.name,
-      //   type: templateFile.type,
-      //   size: templateFile.size,
-      // });
       await requestClient.createRequest({
         title: values.title,
         description: values.description,
@@ -197,9 +187,10 @@ const Requests: React.FC = () => {
   };
 
   const handleSignRequest = async () => {
+    let requestId: string | undefined;
     try {
       const values = await signForm.validateFields();
-      const requestId = selectedRequest!.id;
+      requestId = selectedRequest!.id;
       setSigningRequestId(requestId);
       setRequests((prev) =>
         prev.map((req) =>
@@ -225,7 +216,7 @@ const Requests: React.FC = () => {
       );
       await requestClient.signRequest(requestId, values.signatureId);
       message.success("Request signed successfully!");
-      await fetchRequests();
+      // await fetchRequests();
       setIsSignDrawerOpen(false);
       signForm.resetFields();
       setSelectedRequest(null);
@@ -235,6 +226,13 @@ const Requests: React.FC = () => {
       await fetchRequests();
     } finally {
       setSigningRequestId(null);
+      if (requestId) {
+        setSigningProgress((prev) => {
+          const newProgress = { ...prev };
+          delete newProgress[requestId!];
+          return newProgress;
+        });
+      }
     }
   };
 
@@ -308,6 +306,7 @@ const Requests: React.FC = () => {
     try {
       setLoading(true);
       await requestClient.delegateRequest(id);
+      
       message.success("Request delegated successfully!");
       await fetchRequests();
     } catch (error) {
@@ -316,6 +315,13 @@ const Requests: React.FC = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSigningProgress = (data: { requestId: string; current: number; total: number }) => {
+    setSigningProgress((prev) => ({
+      ...prev,
+      [data.requestId]: { current: data.current, total: data.total },
+    }));
   };
 
   const handleError = (error: unknown, fallbackMsg: string) => {
@@ -330,15 +336,45 @@ const Requests: React.FC = () => {
     message.error(fallbackMsg);
   };
 
+  const signStatusUpdate = (data: any) => {
+    setRequests((prev) =>
+      prev.map((req) =>
+        req.id === data.requestId
+          ? {
+            ...req,
+            status: signStatusDisplay[data.status === 'inProcess' ? signStatus.inProcess : signStatus.Signed],
+            rawStatus: data.status === 'inProcess' ? signStatus.inProcess : signStatus.Signed,
+          }
+          : req
+      )
+    );
+    setFilteredRequests((prev) =>
+      prev.map((req) =>
+        req.id === data.requestId
+          ? {
+            ...req,
+            status: signStatusDisplay[data.status === 'inProcess' ? signStatus.inProcess : signStatus.Signed],
+            rawStatus: data.status === 'inProcess' ? signStatus.inProcess : signStatus.Signed,
+          }
+          : req
+      )
+    );
+  }
+
   useEffect(() => {
     fetchRequests();
     fetchOfficers();
+
+    socket.on('signingRequest', handleSigningProgress);
+    socket.on('requestStatusUpdate', signStatusUpdate);
+
+    return () => {
+      socket.off('signingRequest', handleSigningProgress);
+    };
   }, []);
 
   const getActions = (record: Request) => {
     const menuItems: any[] = [];
-
-    // Clone
     menuItems.push({
       key: "clone",
       label: "Clone",
@@ -346,24 +382,24 @@ const Requests: React.FC = () => {
     });
 
     if (record.rawStatus === signStatus.unsigned) {
-        menuItems.push(
-          {
-            key: "send",
-            label: "Send for Signature",
-            disabled: record.documentCount === 0 || officers.length === 0,
-            onClick: () => {
-              setSelectedRequest(record);
-              setIsSendDrawerOpen(true);
-            },
+      menuItems.push(
+        {
+          key: "send",
+          label: "Send for Signature",
+          disabled: record.documentCount === 0 || officers.length === 0,
+          onClick: () => {
+            setSelectedRequest(record);
+            setIsSendDrawerOpen(true);
           },
-          {
-            key: "delete",
-            label: "Delete",
-            danger: true,
-            onClick: () => handleDeleteRequest(record.id),
-          }
-        );
-    } else if (record.rawStatus === signStatus.delegated) {
+        },
+        {
+          key: "delete",
+          label: "Delete",
+          danger: true,
+          onClick: () => handleDeleteRequest(record.id),
+        }
+      );
+    } else if (record.rawStatus === signStatus.delegated && record.createdBy == userId) {
       menuItems.push({
         key: "sign",
         label: "Sign",
@@ -414,7 +450,6 @@ const Requests: React.FC = () => {
           onClick: () => handleDownloadAll(record.id, record.title),
         }
       );
-
       if (isReader) {
         menuItems.push({
           key: "dispatch",
@@ -443,6 +478,7 @@ const Requests: React.FC = () => {
       </Dropdown>
     );
   };
+
   const columns = [
     {
       title: "Title",
@@ -474,8 +510,7 @@ const Requests: React.FC = () => {
       title: "Rejected Documents",
       dataIndex: "rejectedCount",
       key: "rejectedCount",
-      render: (count: number, record: Request) =>
-      (
+      render: (count: number, record: Request) => (
         <Button
           type="link"
           onClick={() => navigate(`/dashboard/request/${record.id}/rejected`)}
@@ -498,46 +533,47 @@ const Requests: React.FC = () => {
         const displayStatus = isReader && record.rawStatus === signStatus.Signed
           ? signStatusDisplay[signStatus.readyForDispatch]
           : record.status;
-        // console.log('Status render:', {
-        //   id: record.id,
-        //   rawStatus: record.rawStatus,
-        //   status: record.status,
-        //   rejectionReason: record.rejectionReason,
-        //   isRejected: record.rawStatus === signStatus.rejected,
-        //   hasReason: !!record.rejectionReason,
-        // });
+        const progress = signingProgress[record.id];
         return (
-          <Tooltip
-            title={
-              record.rawStatus === signStatus.rejected && record.rejectionReason
-                ? `Reason: ${record.rejectionReason}`
-                : ''
-            }
-          >
-            <Tag
-              color={
-                displayStatus === signStatusDisplay[signStatus.unsigned]
-                  ? "red"
-                  : displayStatus === signStatusDisplay[signStatus.readForSign]
-                    ? "orange"
-                    : displayStatus === signStatusDisplay[signStatus.rejected]
-                      ? "volcano"
-                      : displayStatus === signStatusDisplay[signStatus.delegated]
-                        ? "blue"
-                        : displayStatus === signStatusDisplay[signStatus.inProcess]
-                          ? "cyan"
-                          : displayStatus === signStatusDisplay[signStatus.Signed]
-                            ? "green"
-                            : displayStatus === signStatusDisplay[signStatus.readyForDispatch]
-                              ? "lime"
-                              : displayStatus === signStatusDisplay[signStatus.dispatched]
-                                ? "purple"
-                                : "default"
+          <div>
+            <Tooltip
+              title={
+                record.rawStatus === signStatus.rejected && record.rejectionReason
+                  ? `Reason: ${record.rejectionReason}`
+                  : ''
               }
             >
-              {displayStatus || "Unknown"}
-            </Tag>
-          </Tooltip>
+              <Tag
+                color={
+                  displayStatus === signStatusDisplay[signStatus.unsigned]
+                    ? "red"
+                    : displayStatus === signStatusDisplay[signStatus.readForSign]
+                      ? "orange"
+                      : displayStatus === signStatusDisplay[signStatus.rejected]
+                        ? "volcano"
+                        : displayStatus === signStatusDisplay[signStatus.delegated]
+                          ? "blue"
+                          : displayStatus === signStatusDisplay[signStatus.inProcess]
+                            ? "cyan"
+                            : displayStatus === signStatusDisplay[signStatus.Signed]
+                              ? "green"
+                              : displayStatus === signStatusDisplay[signStatus.readyForDispatch]
+                                ? "lime"
+                                : displayStatus === signStatusDisplay[signStatus.dispatched]
+                                  ? "purple"
+                                  : "default"
+                }
+              >
+                {displayStatus || "Unknown"}
+              </Tag>
+            </Tooltip>
+            {/* {progress && record.rawStatus === signStatus.inProcess && ( */}
+            {progress && (
+              <div style={{ marginTop: 4, fontSize: 12, color: "#555" }}>
+                {progress.current}/{progress.total}
+              </div>
+            )}
+          </div>
         );
       },
     },
