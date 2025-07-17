@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { Button, Drawer, Menu, Dropdown, Select, Tag, message, Form, Input, Upload, Tooltip } from "antd";
-import { UploadOutlined, MoreOutlined } from "@ant-design/icons";
+import { Button, Menu, Dropdown, Tag, message, Form, Input, Tooltip } from "antd";
+import { MoreOutlined } from "@ant-design/icons";
 import CustomTable from "../components/CustomTable";
 import MainAreaLayout from "../components/main-layout/main-layout";
 import { useNavigate } from "react-router";
@@ -8,8 +8,8 @@ import { requestClient, useAppStore } from "../store";
 import { AxiosError } from "axios";
 import { roles, signStatus, signStatusDisplay } from "../libs/constants";
 import { Request, Officer, Signature } from '../@types/interfaces/Requests';
+import { SendForSignDrawer, CreateRequestDrawer, RejectRequestDrawer, SignRequestDrawer } from "../components/drawers";
 import socket from "../client/socket";
-const backendUrl = import.meta.env.VITE_BACKEND_URL;
 
 const Requests: React.FC = () => {
   const navigate = useNavigate();
@@ -215,7 +215,8 @@ const Requests: React.FC = () => {
         )
       );
       await requestClient.signRequest(requestId, values.signatureId);
-      message.success("Request signed successfully!");
+      // message.success("Request signed successfully!");
+      message.success("Request queued for signing")
       // await fetchRequests();
       setIsSignDrawerOpen(false);
       signForm.resetFields();
@@ -306,7 +307,7 @@ const Requests: React.FC = () => {
     try {
       setLoading(true);
       await requestClient.delegateRequest(id);
-      
+
       message.success("Request delegated successfully!");
       await fetchRequests();
     } catch (error) {
@@ -342,8 +343,19 @@ const Requests: React.FC = () => {
         req.id === data.requestId
           ? {
             ...req,
-            status: signStatusDisplay[data.status === 'inProcess' ? signStatus.inProcess : signStatus.Signed],
-            rawStatus: data.status === 'inProcess' ? signStatus.inProcess : signStatus.Signed,
+            status:
+              data.status === 'inProcess'
+                ? signStatusDisplay[signStatus.inProcess]
+                : data.status === 'rejected'
+                  ? signStatusDisplay[signStatus.rejected]
+                  : signStatusDisplay[signStatus.Signed],
+            rawStatus:
+              data.status === 'inProcess'
+                ? signStatus.inProcess
+                : data.status === 'rejected'
+                  ? signStatus.rejected
+                  : signStatus.Signed,
+            rejectionReason: data.rejectionReason || req.rejectionReason,
           }
           : req
       )
@@ -353,13 +365,24 @@ const Requests: React.FC = () => {
         req.id === data.requestId
           ? {
             ...req,
-            status: signStatusDisplay[data.status === 'inProcess' ? signStatus.inProcess : signStatus.Signed],
-            rawStatus: data.status === 'inProcess' ? signStatus.inProcess : signStatus.Signed,
+            status:
+              data.status === 'inProcess'
+                ? signStatusDisplay[signStatus.inProcess]
+                : data.status === 'rejected'
+                  ? signStatusDisplay[signStatus.rejected]
+                  : signStatusDisplay[signStatus.Signed],
+            rawStatus:
+              data.status === 'inProcess'
+                ? signStatus.inProcess
+                : data.status === 'rejected'
+                  ? signStatus.rejected
+                  : signStatus.Signed,
+            rejectionReason: data.rejectionReason || req.rejectionReason,
           }
           : req
       )
     );
-  }
+  };
 
   useEffect(() => {
     fetchRequests();
@@ -530,7 +553,7 @@ const Requests: React.FC = () => {
       dataIndex: "status",
       key: "status",
       render: (_: string, record: Request) => {
-        const displayStatus = isReader && record.rawStatus === signStatus.Signed
+        const displayStatus = record.createdBy == userId && record.rawStatus === signStatus.Signed
           ? signStatusDisplay[signStatus.readyForDispatch]
           : record.status;
         const progress = signingProgress[record.id];
@@ -567,8 +590,7 @@ const Requests: React.FC = () => {
                 {displayStatus || "Unknown"}
               </Tag>
             </Tooltip>
-            {/* {progress && record.rawStatus === signStatus.inProcess && ( */}
-            {progress && (
+            {progress && record.rawStatus === signStatus.inProcess && (
               <div style={{ marginTop: 4, fontSize: 12, color: "#555" }}>
                 {progress.current}/{progress.total}
               </div>
@@ -608,192 +630,52 @@ const Requests: React.FC = () => {
         data={filteredRequests}
         loading={loading}
       />
-      <Drawer
-        title="Send for Signature"
+
+      <SendForSignDrawer
         open={isSendDrawerOpen}
         onClose={() => {
           setIsSendDrawerOpen(false);
           setSelectedRequest(null);
           sendForm.resetFields();
         }}
-        footer={null}
-        width={400}
-      >
-        <Form form={sendForm} layout="vertical" onFinish={handleSendForSignature}>
-          <Form.Item
-            label="Select Officer"
-            name="officerId"
-            rules={[{ required: true, message: "Please select an officer" }]}
-          >
-            <Select
-              placeholder="Select an officer"
-              disabled={officers.length === 0}
-              options={officers.map((officer) => ({
-                value: officer.id,
-                label: officer.name,
-              }))}
-            />
-          </Form.Item>
-          <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
-            <Button
-              onClick={() => {
-                setIsSendDrawerOpen(false);
-                setSelectedRequest(null);
-                sendForm.resetFields();
-              }}
-            >
-              Cancel
-            </Button>
-            <Button type="primary" htmlType="submit" loading={loading} disabled={officers.length === 0}>
-              Send
-            </Button>
-          </div>
-        </Form>
-      </Drawer>
-      <Drawer
-        title="Create New Request"
+        form={sendForm}
+        officers={officers}
+        loading={loading}
+        onFinish={handleSendForSignature}
+      />
+      <CreateRequestDrawer
         open={isCreateDrawerOpen}
         onClose={() => {
           setIsCreateDrawerOpen(false);
           createForm.resetFields();
         }}
-        footer={null}
-        width={400}
-      >
-        <Form form={createForm} layout="vertical" onFinish={handleCreateRequest}>
-          <Form.Item
-            label="Title"
-            name="title"
-            rules={[{ required: true, message: "Please enter a title" }]}
-          >
-            <Input placeholder="Enter request title" />
-          </Form.Item>
-          <Form.Item
-            label="Description"
-            name="description"
-            rules={[{ required: true, message: "Please enter a description" }]}
-          >
-            <Input placeholder="Enter request description" />
-          </Form.Item>
-          <Form.Item
-            label="Template File"
-            name="templateFile"
-            valuePropName="fileList"
-            getValueFromEvent={(e) => (Array.isArray(e) ? e : e.fileList)}
-            rules={[{ required: true, message: "Please upload a template file" }]}
-          >
-            <Upload
-              accept=".doc,.docx"
-              maxCount={1}
-              beforeUpload={() => false}
-            >
-              <Button icon={<UploadOutlined />}>Upload Template File</Button>
-            </Upload>
-          </Form.Item>
-          <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
-            <Button
-              onClick={() => {
-                setIsCreateDrawerOpen(false);
-                createForm.resetFields();
-              }}
-            >
-              Cancel
-            </Button>
-            <Button type="primary" htmlType="submit" loading={loading}>
-              Create
-            </Button>
-          </div>
-        </Form>
-      </Drawer>
-      <Drawer
-        title="Sign Request"
+        form={createForm}
+        loading={loading}
+        onFinish={handleCreateRequest}
+      />
+      <SignRequestDrawer
         open={isSignDrawerOpen}
         onClose={() => {
           setIsSignDrawerOpen(false);
           setSelectedRequest(null);
           signForm.resetFields();
         }}
-        footer={null}
-        width={400}
-      >
-        <Form form={signForm} layout="vertical" onFinish={handleSignRequest}>
-          <Form.Item
-            label="Select Signature"
-            name="signatureId"
-            rules={[{ required: true, message: "Please select a signature" }]}
-          >
-            <Select
-              placeholder="Select a signature"
-              style={{ width: '100%' }}
-              options={signatures.map((sig) => ({
-                value: sig.id,
-                label: (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <img
-                      src={`${backendUrl}${sig.url}`}
-                      alt={sig.name}
-                      style={{ width: 40, height: 40, objectFit: 'contain', border: '1px solid #ddd' }}
-                    />
-                    <span>{sig.name}</span>
-                  </div>
-                ),
-              }))}
-            />
-          </Form.Item>
-          <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
-            <Button
-              onClick={() => {
-                setIsSignDrawerOpen(false);
-                setSelectedRequest(null);
-                signForm.resetFields();
-              }}
-            >
-              Cancel
-            </Button>
-            <Button type="primary" htmlType="submit" loading={signingRequestId === selectedRequest?.id}>
-              Sign
-            </Button>
-          </div>
-        </Form>
-      </Drawer>
-      <Drawer
-        title="Reject Request"
+        form={signForm}
+        signatures={signatures}
+        loading={loading}
+        onFinish={handleSignRequest}
+      />
+      <RejectRequestDrawer
         open={isRejectDrawerOpen}
         onClose={() => {
           setIsRejectDrawerOpen(false);
           setSelectedRequest(null);
           rejectForm.resetFields();
         }}
-        footer={null}
-        width={400}
-      >
-        <Form form={rejectForm} layout="vertical" onFinish={handleRejectRequest}>
-          <Form.Item
-            label="Rejection Reason"
-            name="rejectionReason"
-            rules={[{ required: true, message: "Please enter a rejection reason" }]}
-          >
-            <Input.TextArea
-              placeholder="Enter the reason for rejection"
-              rows={4}
-            />
-          </Form.Item>
-          <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
-            <Button
-              onClick={() => {
-                setIsRejectDrawerOpen(false);
-                setSelectedRequest(null);
-                rejectForm.resetFields();
-              }}
-            >
-              Cancel
-            </Button>
-            <Button type="primary" htmlType="submit" loading={loading}>
-              Reject
-            </Button>
-          </div>
-        </Form>
-      </Drawer>
+        form={rejectForm}
+        onFinish={handleRejectRequest}
+        loading={loading}
+      />
     </MainAreaLayout>
   );
 };
